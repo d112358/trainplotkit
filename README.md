@@ -22,7 +22,7 @@ Create live subplots in your notebook that update while training a PyTorch model
 
 # Installation
 ```
-pip install git+https://github.com/d112358/trainplotkit.git
+pip install trainplotkit
 ```
 
 # Usage example
