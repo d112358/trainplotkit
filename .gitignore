@@ -130,6 +130,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv*
 env/
 venv/
 ENV/
@@ -173,3 +174,4 @@ cython_debug/
 # Others
 data/
 nbs/lightning_logs/
+build_output/

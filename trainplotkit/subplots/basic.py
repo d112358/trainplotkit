@@ -5,167 +5,17 @@ from torcheval.metrics.metric import Metric
 import plotly.graph_objects as go
 import plotly.callbacks as cb
 from plotly.basedatatypes import BaseTraceType
-from plotly.subplots import make_subplots
-from IPython.display import display
-from .utils import to_cpu, to_device
-from .layout import place_subplots
-
-class SubPlot():
-    ax_type = 'xy'  # https://plotly.com/python/subplots/#subplots-types
-    def __init__(self, colspan:int=1, rowspan:int=1):
-        self.span = (rowspan, colspan)
-        self.parent:"PlotGrid" = None
-        self.spi: int = None  # Index within parent's sub-plot list
-        self.position: Tuple[int,int] = None  # (row,col) position in grid
-
-    # Subplot labels and contents
-    def title(self) -> str: return ''
-    def xlabel(self) -> str: return ''
-    def ylabel(self) -> str: return ''
-
-    def create_empty(self, parent, spi, position):
-        self.parent = parent
-        self.spi = spi
-        self.position = position
-
-    # Events
-    def after_batch(self, training:bool, inputs:Tensor, targets:Tensor, predictions:Tensor, loss:Tensor): pass
-    def after_epoch(self, training:bool): pass
-    def after_fit(self): pass
-    def on_user_epoch(self, epoch:int): pass
-    def on_user_sample(self, sample:int): pass
-    def on_user_channel(self, channel:int): pass
-
-    # Helpers
-    def append_spi(self, name):
-        """Ensure that the correct sub-plot is targeted, e.g. 'xaxis' -> 'xaxis2'"""
-        return name if self.spi < 1 else f"{name}{self.spi+1}"
-    
-    def update_ax_titles(self):
-        """Convenience method to update the axis labels of the sub-plot"""
-        xaxis_name = self.append_spi('xaxis')
-        yaxis_name = self.append_spi('yaxis')
-        kwargs = {xaxis_name: dict(title_text=self.xlabel()),
-                  yaxis_name: dict(title_text=self.ylabel())}
-        self.parent.widget.update_layout(**kwargs)
-
-    def update_range(self, x_range, y_range):
-        """Convenience method to update the axis ranges of the sub-plot"""
-        xaxis_name = self.append_spi('xaxis')
-        yaxis_name = self.append_spi('yaxis')
-        kwargs = {xaxis_name: dict(range=x_range),
-                  yaxis_name: dict(range=y_range)}
-        self.parent.widget.update_layout(**kwargs)
-
-    def update_axes(self, xaxis:Mapping, yaxis:Mapping):
-        """Convenience method to update custom axis attributes of the sub-plot"""
-        xaxis_name = self.append_spi('xaxis')
-        yaxis_name = self.append_spi('yaxis')
-        kwargs = {xaxis_name: dict(xaxis),
-                  yaxis_name: dict(yaxis)}
-        self.parent.widget.update_layout(**kwargs)
-
-
-class PlotGrid():
-    def __init__(self, num_grid_cols:int, subplots:List[SubPlot], fig_height=500):
-        self.num_grid_cols = num_grid_cols
-        self.subplots = subplots
-        self.fig_height = fig_height
-        self.widget: go.FigureWidget = None
-        self.clicked_trace: BaseTraceType = None
-        self.create_empty()
-
-    def show(self):
-        """
-        Renders the plot in a widget that supports live updates and full user 
-        interaction, including click events on traces.
-
-        The widget will not persist beyond the current notebook session.
-
-        This can be called from multiple notebook cells to reduce scrolling 
-        fatigue. Under normal circumstances, the resulting widgets will all 
-        accept click events and remain synchronized.
-        """
-        display(self.widget)
-        
-    def show_static(self, renderer='notebook_connected'):
-        """
-        Renders the plot in a static figure that will persist beyond the 
-        current notebook session.
-
-        The figure does not support live updates and user interaction is 
-        limited to the hover, pan and zoom events provided by Plotly.
-        """
-        self.widget.show(renderer=renderer)
-
-    def create_empty(self):
-        spans = [sp.span for sp in self.subplots]
-        num_rows, positions, specs, matrix = place_subplots(self.num_grid_cols, spans)
-        sp_titles = [sp.title() for sp in self.subplots]
-        self.widget = go.FigureWidget(make_subplots(rows=num_rows, cols=self.num_grid_cols, specs=specs, subplot_titles=sp_titles))
-        self.widget.update_layout(height=self.fig_height)
-        for spi, sp in enumerate(self.subplots):
-            sp.parent, sp.spi, sp.position = self, spi, positions[spi]
-            sp.create_empty(self, spi, positions[spi])
-            sp.update_ax_titles()
-
-    def add_trace(self, sp:SubPlot, trace:BaseTraceType): 
-        self.widget.add_trace(trace, row=sp.position[0]+1, col=sp.position[1]+1)
-        return self.widget.data[-1]  # Object reference to the trace just added
-    
-    # Register events to trigger if the user clicks on traces 
-    def register_user_epoch_event(self, trace:BaseTraceType): 
-        trace.on_click(self.on_user_epoch)
-    def register_user_sample_event(self, trace:BaseTraceType): 
-        trace.on_click(self.on_user_sample)
-    def register_user_channel_event(self, trace:BaseTraceType): 
-        trace.on_click(self.on_user_channel)
-
-    # Events (just forwarded to all sub-plots)
-    def after_batch(self, training:bool, inputs, targets, predictions, loss):
-        for sp in self.subplots: sp.after_batch(training, to_cpu(inputs), to_cpu(targets), to_cpu(predictions), to_cpu(loss))
-    def after_epoch(self, training:bool):
-        for sp in self.subplots: sp.after_epoch(training)
-    def after_fit(self):
-        for sp in self.subplots: sp.after_fit()
-    def on_user_epoch(self, trace, points:cb.Points, selector):
-        if not points.point_inds: return
-        self.clicked_trace = trace
-        epoch = points.point_inds[0]
-        for sp in self.subplots: sp.on_user_epoch(epoch)
-    def on_user_sample(self, trace, points:cb.Points, selector):
-        if not points.point_inds: return
-        self.clicked_trace = trace
-        sample = points.point_inds[0]
-        for sp in self.subplots: sp.on_user_sample(sample)
-    def on_user_channel(self, trace, points:cb.Points, selector):
-        if not points.point_inds: return
-        self.clicked_trace = trace
-        channel = points.point_inds[0]
-        for sp in self.subplots: sp.on_user_channel(channel)
-
-
-class AxisRange():
-    """Convenience class to simplify keeping ranges updated with plot contents"""
-    def __init__(self, min_x=0, max_x=1, min_y=0, max_y=1):
-        self.min_x, self.max_x, self.min_y, self.max_y = min_x, max_x, min_y, max_y
-
-    def x_range(self): return [self.min_x, self.max_x]
-    def y_range(self): return [self.min_y, self.max_y]
-
-    def update(self, x_values, y_values):
-        min_x, max_x = min(x_values), max(x_values)
-        min_y, max_y = min(y_values), max(y_values)
-
-        range_changed = False
-        if min_x < self.min_x: self.min_x = min_x; range_changed = True
-        if max_x > self.max_x: self.max_x = max_x; range_changed = True
-        if min_y < self.min_y: self.min_y = min_y; range_changed = True
-        if max_y > self.max_y: self.max_y = max_y; range_changed = True
-        return range_changed
+from ..plotgrid import PlotGrid, SubPlot
+from ..utils import AxisRange
 
 class TrainingCurveSP(SubPlot):
-    """Plots the training and validation loss as a function of epoch"""
+    """
+    Plots the training and validation loss as a function of epoch
+
+    After training has completed, the following user interactions are available:
+    * Clicking this subplot calls `on_user_epoch`, causing all subplots in
+      the same `PlotGrid` that implements this method to be updated
+    """
     def __init__(self, colspan:int=1, rowspan:int=1):
         super().__init__(colspan, rowspan)
         self.xy_range = AxisRange(0, 10, 0, 0.001)
@@ -230,7 +80,13 @@ class TrainingCurveSP(SubPlot):
 
 
 class MetricSP(SubPlot):
-    """Plots the specified metric as a function of epoch"""
+    """
+    Plots the specified metric as a function of epoch
+
+    After training has completed, the following user interactions are available:
+    * Clicking this subplot calls `on_user_epoch`, causing all subplots in
+      the same `PlotGrid` that implements this method to be updated
+    """
     def __init__(self, metric_name:str, metric:Metric[Tensor], colspan=1, rowspan=1):
         super().__init__(colspan, rowspan)
         self.metric_name = metric_name
@@ -257,11 +113,11 @@ class MetricSP(SubPlot):
         self.marker_trace = parent.add_trace(self, marker_trace)
     
     def after_batch(self, training, inputs, targets, predictions, loss):
-        if training: return  # Only interested in validation metrics
+        if training: return  # Only interested in validation samples
         self.metric.update(predictions.detach().cpu(), targets.detach().cpu())
 
     def after_epoch(self, training):
-        if training: return  # Only interested in validation metrics
+        if training: return  # Only interested in validation samples
         value = self.metric.compute()
         new_x = tuple(self.metric_trace.x) + (self.epoch,)
         new_y = tuple(self.metric_trace.y) + (value,)
@@ -280,18 +136,40 @@ class MetricSP(SubPlot):
         y = self.metric_trace.y[epoch]
         self.marker_trace.update(x=[epoch], y=[y])
 
+
 class ValidLossSP(SubPlot):
     """
-    Scatter plot of validation loss for individual samples
-    Unlike the standard loss functions `batch_loss_fn` must not perform
-    a reduction (e.g. mean) over the samples in the batch at the end.
+    Scatter plot of validation loss for individual samples as a function of 
+    sample index
 
-    For example: 
-    batch_loss_fn = lambda preds,targs: F.nll_loss(preds, target, reduction=None)
+    Usage notes:
+    * This subplot considers only the validation set and its interpretation 
+      may be counter-intuitive if the validation set is shuffled between epochs
+
+    Inputs
+    * `batch_loss_fn`: A callable of the following form:
+      `loss = batch_loss_fn(predictions, targets)`
+      where `preditions`, `targets` and `loss` are all tensors representing a 
+      single batch of data. Unlike the standard loss functions provided by 
+      PyTorch, `batch_loss_fn` must not perform a reduction (e.g. mean) along the 
+      batch dimension. An example of a suitable `batch_loss_fn` is given as:
+      `batch_loss_fn = lambda preds,targs: F.nll_loss(preds, target, reduction=None)`
+    * `remember_past_epochs`: If True, the subplot will remember the
+      validation loss for earlier epochs and allow user interaction via 
+      `on_user_epoch`. It is up to the user to ensure that 
+      `num_epochs * num_samples` values will fit in memory.
+
+    After training has completed, the following user interactions are available:
+    * If `remember_past_epochs` was set to `True`, a different epoch may be 
+      selected by calling `on_user_epoch` or clicking any subplot in the same 
+      PlotGrid that calls `PlotGrid.register_user_epoch_event`
+    * Clicking this subplot calls `on_user_sample`, causing all subplots in
+      the same `PlotGrid` that implements this method to be updated
     """
-    def __init__(self, batch_loss_fn:Callable, colspan=1, rowspan=1):
+    def __init__(self, batch_loss_fn:Callable, remember_past_epochs:bool, colspan=1, rowspan=1):
         super().__init__(colspan, rowspan)
         self.loss_fn = batch_loss_fn
+        self.remember_past_epochs = remember_past_epochs
         self.xy_range = AxisRange(0, 10, 0, 0.001)
         self.cur_epoch_loss: List[float] = []
         self.loss: List[List[float]] = []  # self.loss[epoch][sample]
@@ -300,7 +178,9 @@ class ValidLossSP(SubPlot):
         self.user_epoch:int = None  # User-selected epoch
         self.user_sample:int = None  # User-selected sample index
         
-    def title(self) -> str: return 'All-sample validation loss'
+    def title(self) -> str:  
+        epoch_str = '' if self.user_epoch is None else f': epoch {self.user_epoch}'
+        return f'Validation loss per sample{epoch_str}'
     def xlabel(self) -> str: return 'Sample'
     def ylabel(self) -> str: return 'Validation loss'
 
@@ -313,14 +193,15 @@ class ValidLossSP(SubPlot):
         self.marker_trace = parent.add_trace(self, marker_trace)
     
     def after_batch(self, training, inputs, targets, predictions, loss):
-        if training: return  # Only interested in validation metrics
-        loss:Tensor = self.loss_fn(predictions, targets)
+        if training: return  # Only interested in validation samples
+        loss:Tensor = self.loss_fn(predictions.detach().cpu(), targets.detach().cpu())
         self.cur_epoch_loss += loss.tolist()
 
     def after_epoch(self, training):
-        if training: return  # Only interested in validation metrics
+        if training: return  # Only interested in validation samples
         new_y = self.cur_epoch_loss.copy()
         new_x = list(range(len(new_y)))
+        if not self.remember_past_epochs: self.loss = []
         self.loss.append(self.cur_epoch_loss.copy())
         self.cur_epoch_loss = []  # Clear for next epoch
 
@@ -336,6 +217,7 @@ class ValidLossSP(SubPlot):
         self.marker_trace.update(x=[self.parent.clicked_trace.x[sample]], y=[self.parent.clicked_trace.y[sample]])
 
     def on_user_epoch(self, epoch:int):
+        if not self.remember_past_epochs: return
         self.user_epoch = epoch
 
         # Update scatter plot
@@ -347,17 +229,34 @@ class ValidLossSP(SubPlot):
         if self.user_sample is not None:
             self.marker_trace.update(x=[self.scatter_trace.x[self.user_sample]], y=[self.scatter_trace.y[self.user_sample]])
 
+        # Update title
+        self.update_title()
+
+
 class ImageSP(SubPlot):
     """
     Visualize an image from a dataset
+
+    Usage notes:
+    * This subplot considers only the validation set and its interpretation 
+      may be counter-intuitive if the validation set is shuffled between epochs
+
+    After training has completed, the following user interactions are available:
+    * A different sample may be selected by calling `on_user_sample` or clicking
+      any subplot in the same PlotGrid that calls 
+      `PlotGrid.register_user_sample_event`
     """
-    def __init__(self, ds:Dataset, sample_idx:int=0, colspan=1, rowspan=1):
+    def __init__(self, ds:Dataset, sample_idx:int=0, class_names:List[str]=None, colspan=1, rowspan=1):
         super().__init__(colspan, rowspan)
         self.ds, self.sample_idx = ds, sample_idx
         self.sample_img:Tensor = self.ds[self.sample_idx][0]  # (C,H,W)
+        self.class_names = class_names
         self.img_trace: BaseTraceType = None
         
-    def title(self) -> str: return f'Sample {self.sample_idx}'
+    def title(self) -> str:
+        target = self.ds[self.sample_idx][1]
+        if self.class_names: target = self.class_names[target]
+        return f'Input: sample {self.sample_idx}<br>Target={target}'
     def xlabel(self) -> str: return ''
     def ylabel(self) -> str: return ''
 
@@ -367,16 +266,15 @@ class ImageSP(SubPlot):
         # Color scales: https://plotly.com/python/builtin-colorscales/#builtin-sequential-color-scales
         super().create_empty(parent, spi, position)
         C,H,W = self.sample_img.shape
-        if C>1:
-            z=self.sample_img.transpose((1,2,0)).tolist()  # Move channel dimension to end
-            img_trace = go.Image(z=z)
-        else:
-            z=self.sample_img.tolist()[0]  # Remove channel dimension
-            img_trace = go.Heatmap(z=z, showscale=False, colorscale='gray')
+        z = self.sample_img.permute((1,2,0))  # Move channel dimension to end
+        if C==1: z = z.tile((1,1,3))          # Repeat channel dimension for single-channel images
+        zmin = [float(self.sample_img.min())] * 3 + [0]
+        zmax = [float(self.sample_img.max())] * 3 + [1]
+        img_trace = go.Image(z=z.tolist(), zmin=zmin, zmax=zmax)
         self.img_trace = parent.add_trace(self, img_trace)
-        self.update_range([0,W], [H,0])
 
         # Ensure square tiles
+        self.update_range([0,W], [H,0])
         xanchor_name = self.append_spi('x')
         yanchor_name = self.append_spi('y')
         self.update_axes(xaxis=dict(scaleanchor=yanchor_name, showgrid=False, zeroline=False),
@@ -387,9 +285,100 @@ class ImageSP(SubPlot):
         self.sample_img = self.ds[self.sample_idx][0]  # (C,H,W)
 
         C,H,W = self.sample_img.shape
-        if C>1:
-            z=self.sample_img.transpose((1,2,0)).tolist()  # Move channel dimension to end
-            self.img_trace.update(z=z)
-        else:
-            z=self.sample_img.tolist()[0]  # Remove channel dimension
-            self.img_trace.update(z=z)
+        z = self.sample_img.permute((1,2,0))  # Move channel dimension to end
+        if C==1: z = z.tile((1,1,3))          # Repeat channel dimension for single-channel images
+        self.img_trace.update(z=z.tolist())
+        self.update_title()
+
+            
+class ClassProbsSP(SubPlot):
+    """
+    Bar graph of class probabilities in a classification task
+
+    Usage notes:
+    * This subplot considers only the validation set and its interpretation 
+      may be counter-intuitive if the validation set is shuffled between epochs
+
+    Inputs
+    * `probs_fn`: A callable of the following form:
+      `probs = probs_fn(predictions)`
+      where `predictions` is the parameter sent to `after_batch` and
+      `probs` is a tensor of size `(num_samples, num_classes)` specifying
+      the probabilities of all classes for all samples in the current batch.
+      - If the model predictions are logits, the following is recommended:
+        `prob_fn = lambda preds: torch.softmax(preds, dim=1)`
+      - If the model predictions are already probabilities, `None` may be
+        specified here.
+    * `remember_past_epochs`: If True, the subplot will remember class
+      probabilities for earlier epochs and allow user interaction via 
+      `on_user_epoch`. It is up to the user to ensure that 
+      `num_epochs * num_samples * num_classes` values will fit in memory.
+    * `class_names`: Names to display on the x-axis. If omitted, class 
+      indices will be displayed
+
+    After training has completed, the following user interactions are available:
+    * A different sample may be selected by calling `on_user_sample` or clicking
+      any subplot in the same PlotGrid that calls 
+      `PlotGrid.register_user_sample_event`
+    * If `remember_past_epochs` was set to `True`, a different epoch may be 
+      selected by calling `on_user_epoch` or clicking any subplot in the same 
+      PlotGrid that calls `PlotGrid.register_user_epoch_event`
+    """
+    def __init__(self, probs_fn:Callable, remember_past_epochs:bool, class_names:List[str]=None, colspan=1, rowspan=1):
+        super().__init__(colspan, rowspan)
+        self.probs_fn = probs_fn
+        self.remember_past_epochs = remember_past_epochs
+        self.class_names = class_names
+        self.cur_epoch_probs: List[List[float]] = []  # self.cur_epoch_probs[sample][class]
+        self.probs: List[List[List[float]]] = []  # self.loss[epoch][sample][class]
+        self.bar_trace: BaseTraceType = None
+        self.user_epoch:int = None  # User-selected epoch
+        self.user_sample:int = None  # User-selected sample index
+        
+    def title(self) -> str:
+        epoch_str = '' if self.user_epoch is None else f'epoch {self.user_epoch}, '
+        sample_str = 'sample 0' if self.user_sample is None else f'sample {self.user_sample}'
+        return f'Class probabilities: {epoch_str}{sample_str}'
+    def xlabel(self) -> str: return 'Class'
+    def ylabel(self) -> str: return 'Probability'
+
+    def create_empty(self, parent:PlotGrid, spi, position):
+        super().create_empty(parent, spi, position)
+        bar_trace = go.Bar(x=[], y=[], showlegend=False)
+        self.bar_trace = parent.add_trace(self, bar_trace)
+    
+    def after_batch(self, training, inputs, targets, predictions:Tensor, loss):
+        if training: return  # Only interested in validation samples
+        probs:Tensor = self.probs_fn(predictions.detach().cpu()) if self.probs_fn else predictions.detach().cpu().flatten(start_dim=1)
+        self.cur_epoch_probs += probs.tolist()
+
+    def after_epoch(self, training):
+        if training: return  # Only interested in validation samples
+        new_y = self.cur_epoch_probs[0].copy()
+        new_x = self.class_names if self.class_names else list(range(len(new_y)))
+        if not self.remember_past_epochs: self.probs = []
+        self.probs.append(self.cur_epoch_probs.copy())
+        self.cur_epoch_probs = []  # Clear for next epoch
+        self.bar_trace.update(x=new_x, y=new_y)
+        
+    def on_user_sample(self, sample):
+        epoch = self.user_epoch if self.user_epoch is not None else -1
+        self.user_sample = sample
+
+        # Update bar graph and title
+        new_y = self.probs[epoch][sample]
+        new_x = self.class_names if self.class_names else list(range(len(new_y)))
+        self.bar_trace.update(x=new_x, y=new_y)
+        self.update_title()
+
+    def on_user_epoch(self, epoch:int):
+        if not self.remember_past_epochs: return
+        self.user_epoch = epoch
+        sample = self.user_sample if self.user_sample is not None else 0
+
+        # Update bar graph and title
+        new_y = self.probs[epoch][sample]
+        new_x = self.class_names if self.class_names else list(range(len(new_y)))
+        self.bar_trace.update(x=new_x, y=new_y)
+        self.update_title()
+

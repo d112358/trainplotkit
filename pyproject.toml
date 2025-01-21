@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools >= 64.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name="trainplotkit"
+dynamic = ["version"]
+dependencies = [
+  "torch>=2.3.0",
+  "matplotlib",
+  "numpy",
+  "torcheval",
+  "plotly",
+  "nbformat",
+  "ipywidgets"
+]
+requires-python = ">= 3.9"
+authors = [
+  {name = "Dirk Oosthuizen", email = "dirk.jj.oosthuizen@gmail.com"},
+]
+description = "Create live subplots in your notebook that update while training a PyTorch model"
+readme = "README.md"
+license = {'text'= "MIT"}
+keywords = [
+  "pytorch", "torch", "deep learning", "neural network", "training", 
+  "visualization", "interactive", "dashboard", "jupyter", "notebook", "plotly"
+]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python",
+]
+
+[project.urls]
+Repository = "https://github.com/d112358/trainplotkit.git"
+"Bug Tracker" = "https://github.com/d112358/trainplotkit/issues"
+
+[tool.setuptools]
+packages = ["trainplotkit","trainplotkit.subplots"]
+
+[tool.setuptools.dynamic]
+version = {attr = "trainplotkit.__version__"}
