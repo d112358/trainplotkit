@@ -249,16 +249,30 @@ class ImageSP(SubPlot):
     def __init__(self, ds:Dataset, sample_idx:int=0, class_names:List[str]=None, colspan=1, rowspan=1):
         super().__init__(colspan, rowspan)
         self.ds, self.sample_idx = ds, sample_idx
-        self.sample_img:Tensor = self.ds[self.sample_idx][0]  # (C,H,W)
+        self.sample_img:Tensor = self.get_image(self.sample_idx)  # (C,H,W)
         self.class_names = class_names
         self.img_trace: BaseTraceType = None
         
     def title(self) -> str:
-        target = self.ds[self.sample_idx][1]
+        target = self.get_target(self.sample_idx)
         if self.class_names: target = self.class_names[target]
         return f'Input: sample {self.sample_idx}<br>Target={target}'
     def xlabel(self) -> str: return ''
     def ylabel(self) -> str: return ''
+
+    def get_image(self, sample_idx):
+        sample = self.ds[sample_idx]
+        if isinstance(sample, Mapping):
+            return sample['image']
+        else:
+            return sample[0]
+
+    def get_target(self, sample_idx):
+        sample = self.ds[sample_idx]
+        if isinstance(sample, Mapping):
+            return sample['label']
+        else:
+            return sample[1]
 
     def create_empty(self, parent:PlotGrid, spi, position):
         # RGB images: https://plotly.com/python/imshow/#display-multichannel-image-data-with-goimage
@@ -274,20 +288,37 @@ class ImageSP(SubPlot):
         self.img_trace = parent.add_trace(self, img_trace)
 
         # Ensure square tiles
-        self.update_range([0,W], [H,0])
-        xanchor_name = self.append_spi('x')
-        yanchor_name = self.append_spi('y')
-        self.update_axes(xaxis=dict(scaleanchor=yanchor_name, showgrid=False, zeroline=False),
-                         yaxis=dict(scaleanchor=xanchor_name, showgrid=False, zeroline=False))
-    
+        # * At the moment, plotly seems to handle all of this when an image trace is added to a
+        #   subplot: https://plotly.com/python/reference/image/
+        square_manually = False
+        if square_manually:
+            self.update_range([0,W], [H,0])
+            xanchor_name = self.append_spi('x')
+            self.update_axes(xaxis=dict(showgrid=False, zeroline=False),
+                             yaxis=dict(scaleanchor=xanchor_name, showgrid=False, zeroline=False))
+        
+    def before_show_static(self):
+        """
+        Sometimes a static figure created via `PlotGrid.show_static()` shows images upside down if
+        generated after the user has interacted with the Plotly controls on the figure, e.g.
+        auto-scale. 
+        
+        Just assigning the y-range to the same value again updates internal state variables to
+        show it upright again.
+        """
+        yaxis_name = self.append_spi('yaxis')
+        self.parent.widget.layout[yaxis_name]['range'] = self.parent.widget.layout[yaxis_name]['range']
+
     def on_user_sample(self, sample:int):
         self.sample_idx = sample
-        self.sample_img = self.ds[self.sample_idx][0]  # (C,H,W)
+        self.sample_img = self.get_image(self.sample_idx)  # (C,H,W)
 
         C,H,W = self.sample_img.shape
         z = self.sample_img.permute((1,2,0))  # Move channel dimension to end
         if C==1: z = z.tile((1,1,3))          # Repeat channel dimension for single-channel images
-        self.img_trace.update(z=z.tolist())
+        zmin = [float(self.sample_img.min())] * 3 + [0]
+        zmax = [float(self.sample_img.max())] * 3 + [1]
+        self.img_trace.update(z=z.tolist(), zmin=zmin, zmax=zmax)
         self.update_title()
 
             

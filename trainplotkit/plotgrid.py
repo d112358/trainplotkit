@@ -29,12 +29,15 @@ class SubPlot():
         self.position = position
 
     # Events
+    def before_fit(self): pass
     def after_batch(self, training:bool, inputs:Tensor, targets:Tensor, predictions:Tensor, loss:Tensor): pass
     def after_epoch(self, training:bool): pass
     def after_fit(self): pass
     def on_user_epoch(self, epoch:int): pass
+    def on_user_batch(self, batch:int): pass
     def on_user_sample(self, sample:int): pass
     def on_user_channel(self, channel:int): pass
+    def before_show_static(self): pass
 
     # Helpers
     def append_spi(self, name):
@@ -100,6 +103,7 @@ class PlotGrid():
         The figure does not support live updates and user interaction is 
         limited to the hover, pan and zoom events provided by Plotly.
         """
+        for sp in self.subplots: sp.before_show_static()
         self.widget.show(renderer=renderer)
 
     def create_empty(self):
@@ -107,7 +111,7 @@ class PlotGrid():
         num_rows, positions, specs, matrix = place_subplots(self.num_grid_cols, spans)
         sp_titles = [sp.title() for sp in self.subplots]
         self.widget = go.FigureWidget(make_subplots(rows=num_rows, cols=self.num_grid_cols, specs=specs, subplot_titles=sp_titles))
-        self.widget.update_layout(height=self.fig_height)
+        self.widget.update_layout(height=self.fig_height, margin=dict(l=0, r=0, t=20, b=10))
         for spi, sp in enumerate(self.subplots):
             sp.parent, sp.spi, sp.position = self, spi, positions[spi]
             sp.create_empty(self, spi, positions[spi])
@@ -120,12 +124,16 @@ class PlotGrid():
     # Register events to trigger if the user clicks on traces 
     def register_user_epoch_event(self, trace:BaseTraceType): 
         trace.on_click(self.on_user_epoch)
+    def register_user_batch_event(self, trace:BaseTraceType): 
+        trace.on_click(self.on_user_batch)
     def register_user_sample_event(self, trace:BaseTraceType): 
         trace.on_click(self.on_user_sample)
     def register_user_channel_event(self, trace:BaseTraceType): 
         trace.on_click(self.on_user_channel)
 
     # Events (just forwarded to all subplots)
+    def before_fit(self):
+        for sp in self.subplots: sp.before_fit()
     def after_batch(self, training:bool, inputs, targets, predictions, loss):
         for sp in self.subplots: sp.after_batch(training, to_cpu(inputs), to_cpu(targets), to_cpu(predictions), to_cpu(loss))
     def after_epoch(self, training:bool):
@@ -137,6 +145,11 @@ class PlotGrid():
         self.clicked_trace = trace
         epoch = points.point_inds[0]
         for sp in self.subplots: sp.on_user_epoch(epoch)
+    def on_user_batch(self, trace, points:cb.Points, selector):
+        if not points.point_inds: return
+        self.clicked_trace = trace
+        batch = points.point_inds[0]
+        for sp in self.subplots: sp.on_user_batch(batch)
     def on_user_sample(self, trace, points:cb.Points, selector):
         if not points.point_inds: return
         self.clicked_trace = trace
