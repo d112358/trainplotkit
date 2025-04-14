@@ -1,7 +1,9 @@
 from typing import List, Tuple, Mapping, Callable, Any
+import torch
 from torch import nn, Tensor
 from torch.utils.data import Dataset
 from torcheval.metrics.metric import Metric
+import numpy as np
 import plotly.graph_objects as go
 import plotly.callbacks as cb
 from plotly.basedatatypes import BaseTraceType
@@ -22,9 +24,10 @@ class TrainingCurveSP(SubPlot):
         self.train_loss_trace: BaseTraceType = None
         self.valid_loss_trace: BaseTraceType = None
         self.marker_trace: BaseTraceType = None
-        self.epoch = 0
+        self.train_epoch = 0
         self.train_num = 0
         self.train_denom = 0
+        self.valid_epoch = 0
         self.valid_num = 0
         self.valid_denom = 0
         
@@ -54,22 +57,24 @@ class TrainingCurveSP(SubPlot):
     def after_epoch(self, training):
         if training:
             loss = self.train_num / self.train_denom
-            new_x = tuple(self.train_loss_trace.x) + (self.epoch,)
+            new_x = tuple(self.train_loss_trace.x) + (self.train_epoch,)
             new_y = tuple(self.train_loss_trace.y) + (loss,)
             self.train_loss_trace.update(x=new_x, y=new_y)
             self.train_num = 0
             self.train_denom = 0
+            range_changed = self.xy_range.update([self.train_epoch], [loss])
+            if range_changed: self.update_range(self.xy_range.x_range(), self.xy_range.y_range())
+            self.train_epoch += 1
         else:
             loss = self.valid_num / self.valid_denom
-            new_x = tuple(self.valid_loss_trace.x) + (self.epoch,)
+            new_x = tuple(self.valid_loss_trace.x) + (self.valid_epoch,)
             new_y = tuple(self.valid_loss_trace.y) + (loss,)
             self.valid_loss_trace.update(x=new_x, y=new_y)
             self.valid_num = 0
             self.valid_denom = 0
-        
-        range_changed = self.xy_range.update([self.epoch], [loss])
-        if range_changed: self.update_range(self.xy_range.x_range(), self.xy_range.y_range())
-        if not training: self.epoch += 1
+            range_changed = self.xy_range.update([self.valid_epoch], [loss])
+            if range_changed: self.update_range(self.xy_range.x_range(), self.xy_range.y_range())
+            self.valid_epoch += 1
 
     def after_fit(self):
         self.parent.register_user_epoch_event(self.train_loss_trace)
@@ -261,11 +266,33 @@ class ImageSP(SubPlot):
     def ylabel(self) -> str: return ''
 
     def get_image(self, sample_idx):
+        # Extract from list, tuple or dictionary
         sample = self.ds[sample_idx]
         if isinstance(sample, Mapping):
-            return sample['image']
+            img_raw = sample['image']
         else:
-            return sample[0]
+            img_raw = sample[0]
+
+        # Convert to Tensor if not already
+        if isinstance(img_raw, Tensor): 
+            img = img_raw
+        elif isinstance(img_raw, np.ndarray): 
+            img = Tensor(img_raw)
+        else:
+            img = Tensor(np.array(img_raw))
+
+        # Ensure shape is (C,H,W)
+        if img.ndim == 2:
+            return img[None,:,:]
+        elif img.ndim == 3:
+            if img.shape[0] in [1,3,4]:
+                return img
+            elif img.shape[2] in [1,3,4]: 
+                return img.permute((2,0,1))
+            else:
+                raise ValueError(f'Unrecognized shape for image tensor: {img.shape}')
+        else:
+            raise ValueError(f'Unrecognized shape for image tensor: {img.shape}')
 
     def get_target(self, sample_idx):
         sample = self.ds[sample_idx]
@@ -321,7 +348,109 @@ class ImageSP(SubPlot):
         self.img_trace.update(z=z.tolist(), zmin=zmin, zmax=zmax)
         self.update_title()
 
-            
+class PredImageSP(SubPlot):
+    """
+    Visualize a predicted image
+
+    Usage notes:
+    * This subplot considers only the validation set and its interpretation 
+      may be counter-intuitive if the validation set is shuffled between epochs
+
+    Inputs
+    * `remember_past_epochs`: If True, the subplot will remember class
+      probabilities for earlier epochs and allow user interaction via 
+      `on_user_epoch`. It is up to the user to ensure that 
+      `num_epochs * N*C*H*W` values will fit in memory.
+    * `img_size`: A (height,width) tuple used to reshape the image if these two
+       dimensions were combined in the output
+    * `sample_idx`: The index of the validation sample to display initially. This 
+      can be modified interactively after training has completed 
+
+    After training has completed, the following user interactions are available:
+    * A different sample may be selected by calling `on_user_sample` or clicking
+      any subplot in the same PlotGrid that calls 
+      `PlotGrid.register_user_sample_event`
+    * If `remember_past_epochs` was set to `True`, a different epoch may be 
+      selected by calling `on_user_epoch` or clicking any subplot in the same 
+      PlotGrid that calls `PlotGrid.register_user_epoch_event`
+    """
+    def __init__(self, remember_past_epochs:bool, img_size:Tuple[int]=None, sample_idx:int=0, colspan=1, rowspan=1):
+        super().__init__(colspan, rowspan)
+        self.remember_past_epochs, self.img_size = remember_past_epochs, img_size
+        self.cur_epoch_images: Tensor = Tensor([])  # self.cur_epoch_images[sample_idx,channel_idx,y,x]
+        self.images: List[Tensor] = []  # self.images[epoch][sample_idx,channel_idx,y,x]
+        self.img_trace: BaseTraceType = None
+        self.user_epoch:int = None  # User-selected epoch
+        self.user_sample:int = sample_idx  # User-selected sample index
+        
+    def title(self) -> str:
+        epoch_str = '' if self.user_epoch is None else f'epoch {self.user_epoch}, '
+        sample_str = 'sample 0' if self.user_sample is None else f'sample {self.user_sample}'
+        return f'Predicted: {epoch_str}{sample_str}'
+    def xlabel(self) -> str: return ''
+    def ylabel(self) -> str: return ''
+
+    def create_empty(self, parent:PlotGrid, spi, position):
+        # RGB images: https://plotly.com/python/imshow/#display-multichannel-image-data-with-goimage
+        # Single-channel: https://plotly.com/python/heatmaps/#basic-heatmap-with-plotlygraphobjects
+        # Color scales: https://plotly.com/python/builtin-colorscales/#builtin-sequential-color-scales
+        super().create_empty(parent, spi, position)
+        img_trace = go.Image(z=[])
+        self.img_trace = parent.add_trace(self, img_trace)
+
+    def preproc_img(self, img:Tensor):
+        C,H,W = img.shape
+        z = img.permute((1,2,0))  # Move channel dimension to end
+        if C==1: z = z.tile((1,1,3))          # Repeat channel dimension for single-channel images
+        zmin = [float(img.min())] * 3 + [0]
+        zmax = [float(img.max())] * 3 + [1]
+        return z.tolist(), zmin, zmax
+        
+    def after_batch(self, training, inputs, targets, predictions:Tensor, loss):
+        if training: return  # Only interested in validation samples
+        must_reshape = self.img_size is not None and self.img_size[-1] != predictions.shape[-1]
+        new_shape = predictions.shape[:-1] + self.img_size if must_reshape else predictions.shape
+        preds_hw = predictions.view(new_shape)
+        preds_nchw = preds_hw.unsqueeze(dim=1) if preds_hw.ndim < 4 else preds_hw  # [N,C,H,W]
+        self.cur_epoch_images = torch.cat((self.cur_epoch_images, preds_nchw), dim=0)
+
+    def after_epoch(self, training):
+        if training: return  # Only interested in validation samples
+        img:Tensor = self.cur_epoch_images[self.user_sample].clone() # [C,H,W]
+        if not self.remember_past_epochs: self.images = []
+        self.images.append(self.cur_epoch_images.clone())
+        self.cur_epoch_images = Tensor([])  # Clear for next epoch
+        
+        z, zmin, zmax = self.preproc_img(img)
+        self.img_trace.update(z=z, zmin=zmin, zmax=zmax)
+
+    def before_show_static(self):
+        # See ImageSP.before_show_static
+        yaxis_name = self.append_spi('yaxis')
+        self.parent.widget.layout[yaxis_name]['range'] = self.parent.widget.layout[yaxis_name]['range']
+
+    def on_user_sample(self, sample):
+        epoch = self.user_epoch if self.user_epoch is not None else -1
+        self.user_sample = sample
+
+        # Update image and title
+        img:Tensor = self.images[epoch][sample]
+        z, zmin, zmax = self.preproc_img(img)
+        self.img_trace.update(z=z, zmin=zmin, zmax=zmax)
+        self.update_title()
+
+    def on_user_epoch(self, epoch:int):
+        if not self.remember_past_epochs: return
+        self.user_epoch = epoch
+        sample = self.user_sample if self.user_sample is not None else 0
+
+        # Update image and title
+        img:Tensor = self.images[epoch][sample]
+        z, zmin, zmax = self.preproc_img(img)
+        self.img_trace.update(z=z, zmin=zmin, zmax=zmax)
+        self.update_title()
+
+
 class ClassProbsSP(SubPlot):
     """
     Bar graph of class probabilities in a classification task

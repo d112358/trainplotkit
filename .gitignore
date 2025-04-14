@@ -173,5 +173,8 @@ cython_debug/
 
 # Others
 data/
+nbs/data/
 nbs/lightning_logs/
+nbs/whisper-tiny-af/
+nbs/MNIST/
 build_output/

@@ -54,6 +54,7 @@ def setup_sanity_check():
 
 def run_sanity_check(train_loader, valid_loader, model, optimizer, criterion, device, pg):
     # Training and validation loop
+    pg.before_fit()
     for epoch in range(4):        
         # Training
         model.train()

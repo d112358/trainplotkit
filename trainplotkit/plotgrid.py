@@ -104,7 +104,12 @@ class PlotGrid():
         limited to the hover, pan and zoom events provided by Plotly.
         """
         for sp in self.subplots: sp.before_show_static()
-        self.widget.show(renderer=renderer)
+        spans = [sp.span for sp in self.subplots]
+        num_rows, positions, specs, matrix = place_subplots(self.num_grid_cols, spans)
+        sp_titles = [sp.title() for sp in self.subplots]
+        fig = go.Figure(self.widget)
+        fig = make_subplots(rows=num_rows, cols=self.num_grid_cols, specs=specs, subplot_titles=sp_titles, figure=fig)
+        fig.show(renderer=renderer)
 
     def create_empty(self):
         spans = [sp.span for sp in self.subplots]
