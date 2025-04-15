@@ -7,4 +7,4 @@ __all__ = (
     "TrainingCurveSP", "MetricSP", "ValidLossSP", "ImageSP", "ClassProbsSP"
     )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

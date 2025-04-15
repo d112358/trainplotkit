@@ -22,6 +22,8 @@ Create live subplots in your notebook that update while training a PyTorch model
 
 # Installation
 ```
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install "plotly>=5,<6"
 pip install trainplotkit
 ```
 
